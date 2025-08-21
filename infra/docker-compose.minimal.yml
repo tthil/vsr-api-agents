@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  # MongoDB service - using exact local image
+  mongodb:
+    image: mongo:7
+    container_name: vsr-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=vsr
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+
+  # RabbitMQ service - using exact local image
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: vsr-rabbitmq
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  # MinIO service - using exact local image
+  minio:
+    image: minio/minio:latest
+    container_name: vsr-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  # Dual-mode CPU worker
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/worker.Dockerfile
+    container_name: vsr-worker-cpu
+    volumes:
+      - ../worker:/app/worker
+      - ../shared:/app/shared
+    environment:
+      # Dual-mode CPU configuration
+      - WORKER_MODE=cpu
+      - ENVIRONMENT=development
+      - MODEL_QUALITY=lightweight
+      - PROCESSING_TIMEOUT=600
+      - MAX_VIDEO_DURATION=30
+      - MAX_RESOLUTION=1280,720
+      - CPU_THREADS=4
+      - MEMORY_LIMIT_MB=4096
+      - MODEL_CACHE_DIR=/tmp/models
+      - MODEL_QUANTIZATION=true
+      - DEBUG=true
+      # Infrastructure
+      - MONGODB_URI=mongodb://mongodb:27017/vsr
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - SPACES_ENDPOINT=http://minio:9000
+      - SPACES_REGION=us-east-1
+      - SPACES_KEY=minioadmin
+      - SPACES_SECRET=minioadmin
+      - SPACES_BUCKET=vsr-videos
+    depends_on:
+      - mongodb
+      - rabbitmq
+      - minio
+    command: ["python", "-m", "vsr_worker.dual_mode_consumer"]
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  rabbitmq_data:
+  minio_data:

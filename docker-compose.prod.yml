@@ -1,0 +1,366 @@
+version: '3.8'
+
+services:
+  # API Service
+  vsr-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: production
+    container_name: vsr-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - NODE_ENV=production
+      - VSR_DB_HOST=mongodb
+      - VSR_DB_PORT=27017
+      - VSR_DB_NAME=vsr_production
+      - VSR_DB_USERNAME=${VSR_DB_USERNAME}
+      - VSR_DB_PASSWORD=${VSR_DB_PASSWORD}
+      - VSR_RABBITMQ_HOST=rabbitmq
+      - VSR_RABBITMQ_PORT=5672
+      - VSR_RABBITMQ_USERNAME=${VSR_RABBITMQ_USERNAME}
+      - VSR_RABBITMQ_PASSWORD=${VSR_RABBITMQ_PASSWORD}
+      - VSR_RABBITMQ_VHOST=vsr_prod
+      - VSR_SPACES_ENDPOINT=${VSR_SPACES_ENDPOINT}
+      - VSR_SPACES_ACCESS_KEY=${VSR_SPACES_ACCESS_KEY}
+      - VSR_SPACES_SECRET_KEY=${VSR_SPACES_SECRET_KEY}
+      - VSR_SPACES_BUCKET=${VSR_SPACES_BUCKET}
+      - VSR_SPACES_REGION=${VSR_SPACES_REGION}
+      - VSR_API_KEYS=${VSR_API_KEYS}
+      - VSR_CORS_ORIGINS=${VSR_CORS_ORIGINS}
+      - VSR_LOG_LEVEL=INFO
+    volumes:
+      - api_logs:/app/logs
+    networks:
+      - vsr_network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # Worker Service (GPU-enabled)
+  vsr-worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      target: production
+    container_name: vsr-worker
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - VSR_DB_HOST=mongodb
+      - VSR_DB_PORT=27017
+      - VSR_DB_NAME=vsr_production
+      - VSR_DB_USERNAME=${VSR_DB_USERNAME}
+      - VSR_DB_PASSWORD=${VSR_DB_PASSWORD}
+      - VSR_RABBITMQ_HOST=rabbitmq
+      - VSR_RABBITMQ_PORT=5672
+      - VSR_RABBITMQ_USERNAME=${VSR_RABBITMQ_USERNAME}
+      - VSR_RABBITMQ_PASSWORD=${VSR_RABBITMQ_PASSWORD}
+      - VSR_RABBITMQ_VHOST=vsr_prod
+      - VSR_SPACES_ENDPOINT=${VSR_SPACES_ENDPOINT}
+      - VSR_SPACES_ACCESS_KEY=${VSR_SPACES_ACCESS_KEY}
+      - VSR_SPACES_SECRET_KEY=${VSR_SPACES_SECRET_KEY}
+      - VSR_SPACES_BUCKET=${VSR_SPACES_BUCKET}
+      - VSR_SPACES_REGION=${VSR_SPACES_REGION}
+      - VSR_WORKER_CONSUMERS=2
+      - VSR_LOG_LEVEL=INFO
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - worker_logs:/app/logs
+      - model_cache:/app/models
+      - /tmp:/tmp
+    networks:
+      - vsr_network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import torch; print('GPU available:', torch.cuda.is_available())"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: vsr-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${VSR_DB_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${VSR_DB_PASSWORD}
+      - MONGO_INITDB_DATABASE=vsr_production
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+      - ./shared/db/init/:/docker-entrypoint-initdb.d/
+    networks:
+      - vsr_network
+    command: mongod --auth --bind_ip_all --replSet rs0
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: vsr-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${VSR_RABBITMQ_USERNAME}
+      - RABBITMQ_DEFAULT_PASS=${VSR_RABBITMQ_PASSWORD}
+      - RABBITMQ_DEFAULT_VHOST=vsr_prod
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit log_levels [{connection,error},{default,warning}]
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./shared/queue/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./shared/queue/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    networks:
+      - vsr_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  # Redis Cache (for rate limiting and caching)
+  redis:
+    image: redis:7.2-alpine
+    container_name: vsr-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PASSWORD=${VSR_REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+      - ./shared/cache/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - vsr_network
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${VSR_REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${VSR_REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: vsr-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d/:/etc/nginx/conf.d/:ro
+      - ./nginx/ssl/:/etc/nginx/ssl/:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - vsr_network
+    depends_on:
+      - vsr-api
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Monitoring - Prometheus
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: vsr-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - vsr_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Monitoring - Grafana
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: vsr-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${VSR_GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_DOMAIN=${VSR_DOMAIN}
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=${VSR_SMTP_HOST}
+      - GF_SMTP_USER=${VSR_SMTP_USER}
+      - GF_SMTP_PASSWORD=${VSR_SMTP_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/:/etc/grafana/provisioning/:ro
+      - ./monitoring/grafana/dashboards/:/var/lib/grafana/dashboards/:ro
+    networks:
+      - vsr_network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Log Management - Loki
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: vsr-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - vsr_network
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Log Collection - Promtail
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: vsr-promtail
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - api_logs:/var/log/api:ro
+      - worker_logs:/var/log/worker:ro
+      - nginx_logs:/var/log/nginx:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - vsr_network
+    depends_on:
+      - loki
+    command: -config.file=/etc/promtail/config.yml
+
+# Networks
+networks:
+  vsr_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Volumes
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  redis_data:
+    driver: local
+  api_logs:
+    driver: local
+  worker_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+  model_cache:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local

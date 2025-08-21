@@ -1,0 +1,92 @@
+# VSR API Deployment Configuration
+# Production deployment settings for DigitalOcean
+
+digitalocean:
+  api_token: "${DO_API_TOKEN}"  # Set via environment variable
+  
+  vpc:
+    region: "nyc3"
+    ip_range: "10.116.0.0/20"
+  
+  droplets:
+    api:
+      region: "nyc3"
+      image: "ubuntu-22-04-x64"
+      size: "s-2vcpu-4gb"
+      count: 2  # For high availability
+    
+    worker:
+      region: "nyc3"
+      image: "ubuntu-22-04-x64"
+      size: "g-2vcpu-8gb-nvidia-rtx-6000-ada"  # GPU-enabled droplet
+      count: 1
+  
+  load_balancer:
+    algorithm: "round_robin"
+    region: "nyc3"
+    health_check_path: "/healthz"
+  
+  spaces:
+    endpoint: "https://nyc3.digitaloceanspaces.com"
+    region: "nyc3"
+    bucket: "${VSR_SPACES_BUCKET}"
+    access_key: "${VSR_SPACES_ACCESS_KEY}"
+    secret_key: "${VSR_SPACES_SECRET_KEY}"
+
+domain:
+  name: "${VSR_DOMAIN}"  # e.g., api.vsr.example.com
+  ssl_email: "${VSR_SSL_EMAIL}"
+  cloudflare_api_token: "${CLOUDFLARE_API_TOKEN}"  # Optional for DNS management
+
+database:
+  mongodb:
+    version: "7.0"
+    replica_set: true
+    backup_retention_days: 30
+  
+  redis:
+    version: "7.2"
+    maxmemory_policy: "allkeys-lru"
+
+messaging:
+  rabbitmq:
+    version: "3.12-management"
+    cluster_size: 1
+    management_enabled: true
+
+monitoring:
+  prometheus:
+    retention: "30d"
+    storage_size: "10GB"
+  
+  grafana:
+    admin_password: "${VSR_GRAFANA_PASSWORD}"
+    smtp_enabled: true
+  
+  loki:
+    retention: "30d"
+    storage_size: "5GB"
+
+security:
+  fail2ban_enabled: true
+  ufw_enabled: true
+  ssh_key_only: true
+  automatic_updates: true
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention_days: 30
+  encryption: true
+
+scaling:
+  auto_scaling: false  # Manual scaling for now
+  min_api_instances: 1
+  max_api_instances: 5
+  cpu_threshold: 70
+  memory_threshold: 80
+
+notifications:
+  slack_webhook: "${SLACK_WEBHOOK_URL}"
+  email_alerts: "${ALERT_EMAIL}"
+  pagerduty_key: "${PAGERDUTY_INTEGRATION_KEY}"

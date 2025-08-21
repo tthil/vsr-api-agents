@@ -1,0 +1,92 @@
+# VSR API Staging Deployment Configuration
+# Staging environment settings for testing and validation
+
+digitalocean:
+  api_token: "${DO_API_TOKEN_STAGING}"
+  
+  vpc:
+    region: "nyc3"
+    ip_range: "10.117.0.0/20"
+  
+  droplets:
+    api:
+      region: "nyc3"
+      image: "ubuntu-22-04-x64"
+      size: "s-1vcpu-2gb"  # Smaller for staging
+      count: 1
+    
+    worker:
+      region: "nyc3"
+      image: "ubuntu-22-04-x64"
+      size: "g-2vcpu-8gb-nvidia-rtx-6000-ada"
+      count: 1
+  
+  load_balancer:
+    algorithm: "round_robin"
+    region: "nyc3"
+    health_check_path: "/healthz"
+  
+  spaces:
+    endpoint: "https://nyc3.digitaloceanspaces.com"
+    region: "nyc3"
+    bucket: "${VSR_SPACES_BUCKET_STAGING}"
+    access_key: "${VSR_SPACES_ACCESS_KEY_STAGING}"
+    secret_key: "${VSR_SPACES_SECRET_KEY_STAGING}"
+
+domain:
+  name: "${VSR_DOMAIN_STAGING}"  # e.g., staging-api.vsr.example.com
+  ssl_email: "${VSR_SSL_EMAIL}"
+  cloudflare_api_token: "${CLOUDFLARE_API_TOKEN}"
+
+database:
+  mongodb:
+    version: "7.0"
+    replica_set: false  # Single instance for staging
+    backup_retention_days: 7
+  
+  redis:
+    version: "7.2"
+    maxmemory_policy: "allkeys-lru"
+
+messaging:
+  rabbitmq:
+    version: "3.12-management"
+    cluster_size: 1
+    management_enabled: true
+
+monitoring:
+  prometheus:
+    retention: "7d"  # Shorter retention for staging
+    storage_size: "5GB"
+  
+  grafana:
+    admin_password: "${VSR_GRAFANA_PASSWORD_STAGING}"
+    smtp_enabled: false  # Disabled for staging
+  
+  loki:
+    retention: "7d"
+    storage_size: "2GB"
+
+security:
+  fail2ban_enabled: true
+  ufw_enabled: true
+  ssh_key_only: true
+  automatic_updates: true
+
+backup:
+  enabled: false  # Disabled for staging
+  schedule: "0 2 * * *"
+  retention_days: 7
+  encryption: true
+
+scaling:
+  auto_scaling: false
+  min_api_instances: 1
+  max_api_instances: 2
+  cpu_threshold: 80
+  memory_threshold: 85
+
+notifications:
+  slack_webhook: "${SLACK_WEBHOOK_URL_STAGING}"
+  email_alerts: "${ALERT_EMAIL_STAGING}"
+  pagerduty_key: ""  # Disabled for staging

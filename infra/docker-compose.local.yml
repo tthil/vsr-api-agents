@@ -1,0 +1,147 @@
+services:
+  # MongoDB service
+  mongodb:
+    image: mongo:7
+    container_name: vsr-mongodb
+    environment:
+      MONGO_INITDB_DATABASE: vsr
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # RabbitMQ service
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: vsr-rabbitmq
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # MinIO service (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    container_name: vsr-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # API service
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    container_name: vsr-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../api:/app/api
+      - ../shared:/app/shared
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/vsr
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - SPACES_ENDPOINT=http://minio:9000
+      - SPACES_REGION=us-east-1
+      - SPACES_KEY=minioadmin
+      - SPACES_SECRET=minioadmin
+      - SPACES_BUCKET=vsr-videos
+      - DISABLE_AUTH=true
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: python -m uvicorn vsr_api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # CPU worker service (dual-mode)
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/worker.Dockerfile
+    container_name: vsr-worker-cpu
+    volumes:
+      - ../worker:/app/worker
+      - ../shared:/app/shared
+    environment:
+      # Dual-mode configuration
+      - WORKER_MODE=cpu
+      - ENVIRONMENT=development
+      - MODEL_QUALITY=lightweight
+      - PROCESSING_TIMEOUT=600
+      - MAX_VIDEO_DURATION=30
+      - MAX_RESOLUTION=1280,720
+      - CPU_THREADS=4
+      - MEMORY_LIMIT_MB=4096
+      - MODEL_CACHE_DIR=/tmp/models
+      - MODEL_QUANTIZATION=true
+      - DEBUG=true
+      # Infrastructure
+      - MONGODB_URI=mongodb://mongodb:27017/vsr
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - SPACES_ENDPOINT=http://minio:9000
+      - SPACES_REGION=us-east-1
+      - SPACES_KEY=minioadmin
+      - SPACES_SECRET=minioadmin
+      - SPACES_BUCKET=vsr-videos
+      # Webhook configuration
+      - WEBHOOK_SECRET=local-dev-secret-key
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["python", "/app/worker/vsr_worker/cpu_worker.py"]
+
+  # MinIO setup service (creates bucket and sets policies)
+  minio-setup:
+    image: minio/mc:latest
+    container_name: vsr-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb --ignore-existing myminio/vsr-videos;
+      /usr/bin/mc anonymous set download myminio/vsr-videos;
+      exit 0;
+      "
+
+volumes:
+  mongodb_data:
+  rabbitmq_data:
+  minio_data:

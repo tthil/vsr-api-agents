@@ -1,0 +1,289 @@
+groups:
+  - name: vsr_api_alerts
+    rules:
+      # API Service Health
+      - alert: VSRAPIDown
+        expr: up{job="vsr-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: vsr-api
+        annotations:
+          summary: "VSR API service is down"
+          description: "VSR API service has been down for more than 1 minute"
+
+      - alert: VSRAPIHighErrorRate
+        expr: rate(http_requests_total{job="vsr-api",status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          service: vsr-api
+        annotations:
+          summary: "High error rate in VSR API"
+          description: "VSR API error rate is {{ $value }} errors per second"
+
+      - alert: VSRAPIHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="vsr-api"}[5m])) > 2
+        for: 3m
+        labels:
+          severity: warning
+          service: vsr-api
+        annotations:
+          summary: "High latency in VSR API"
+          description: "95th percentile latency is {{ $value }}s"
+
+      # Worker Service Health
+      - alert: VSRWorkerDown
+        expr: up{job="vsr-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: vsr-worker
+        annotations:
+          summary: "VSR Worker service is down"
+          description: "VSR Worker service has been down for more than 2 minutes"
+
+      - alert: VSRWorkerHighJobFailureRate
+        expr: rate(vsr_jobs_failed_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: vsr-worker
+        annotations:
+          summary: "High job failure rate in VSR Worker"
+          description: "Job failure rate is {{ $value }} failures per second"
+
+      - alert: VSRWorkerQueueBacklog
+        expr: vsr_queue_pending_jobs > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: vsr-worker
+        annotations:
+          summary: "Large queue backlog in VSR Worker"
+          description: "{{ $value }} jobs are pending in the queue"
+
+      # GPU Monitoring
+      - alert: GPUHighUtilization
+        expr: nvidia_gpu_utilization_gpu > 95
+        for: 10m
+        labels:
+          severity: warning
+          service: gpu
+        annotations:
+          summary: "GPU utilization is very high"
+          description: "GPU utilization is {{ $value }}% for more than 10 minutes"
+
+      - alert: GPUHighTemperature
+        expr: nvidia_gpu_temperature_celsius > 85
+        for: 5m
+        labels:
+          severity: critical
+          service: gpu
+        annotations:
+          summary: "GPU temperature is too high"
+          description: "GPU temperature is {{ $value }}°C"
+
+      - alert: GPUMemoryHigh
+        expr: (nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: gpu
+        annotations:
+          summary: "GPU memory usage is high"
+          description: "GPU memory usage is {{ $value }}%"
+
+  - name: infrastructure_alerts
+    rules:
+      # Database Health
+      - alert: MongoDBDown
+        expr: up{job="mongodb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: mongodb
+        annotations:
+          summary: "MongoDB is down"
+          description: "MongoDB has been down for more than 1 minute"
+
+      - alert: MongoDBHighConnections
+        expr: mongodb_connections{state="current"} > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: mongodb
+        annotations:
+          summary: "MongoDB has high number of connections"
+          description: "MongoDB has {{ $value }} active connections"
+
+      - alert: MongoDBReplicationLag
+        expr: mongodb_replset_member_replication_lag > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: mongodb
+        annotations:
+          summary: "MongoDB replication lag is high"
+          description: "Replication lag is {{ $value }} seconds"
+
+      # Message Queue Health
+      - alert: RabbitMQDown
+        expr: up{job="rabbitmq"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: rabbitmq
+        annotations:
+          summary: "RabbitMQ is down"
+          description: "RabbitMQ has been down for more than 1 minute"
+
+      - alert: RabbitMQHighQueueSize
+        expr: rabbitmq_queue_messages > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: rabbitmq
+        annotations:
+          summary: "RabbitMQ queue size is high"
+          description: "Queue {{ $labels.queue }} has {{ $value }} messages"
+
+      - alert: RabbitMQHighMemoryUsage
+        expr: (rabbitmq_process_resident_memory_bytes / rabbitmq_process_max_heap_size_bytes) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: rabbitmq
+        annotations:
+          summary: "RabbitMQ memory usage is high"
+          description: "RabbitMQ memory usage is {{ $value }}%"
+
+      # Cache Health
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis has been down for more than 1 minute"
+
+      - alert: RedisHighMemoryUsage
+        expr: (redis_memory_used_bytes / redis_memory_max_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value }}%"
+
+  - name: system_alerts
+    rules:
+      # System Resources
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: LowDiskSpace
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk usage is {{ $value }}% on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+
+      - alert: HighDiskIOWait
+        expr: irate(node_cpu_seconds_total{mode="iowait"}[5m]) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "High disk I/O wait time"
+          description: "I/O wait time is {{ $value }}% on {{ $labels.instance }}"
+
+  - name: business_alerts
+    rules:
+      # Business Metrics
+      - alert: LowJobCompletionRate
+        expr: rate(vsr_jobs_completed_total[1h]) < 0.8 * rate(vsr_jobs_submitted_total[1h])
+        for: 15m
+        labels:
+          severity: warning
+          service: business
+        annotations:
+          summary: "Job completion rate is low"
+          description: "Only {{ $value | humanizePercentage }} of jobs are completing successfully"
+
+      - alert: HighAverageProcessingTime
+        expr: avg_over_time(vsr_job_processing_duration_seconds[1h]) > 600
+        for: 30m
+        labels:
+          severity: warning
+          service: business
+        annotations:
+          summary: "Average job processing time is high"
+          description: "Average processing time is {{ $value }}s over the last hour"
+
+      - alert: NoJobsProcessedRecently
+        expr: increase(vsr_jobs_completed_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: business
+        annotations:
+          summary: "No jobs have been processed recently"
+          description: "No jobs have been completed in the last 30 minutes"
+
+  - name: security_alerts
+    rules:
+      # Security Monitoring
+      - alert: HighFailedAuthenticationRate
+        expr: rate(vsr_auth_failures_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "High rate of authentication failures"
+          description: "{{ $value }} authentication failures per second"
+
+      - alert: RateLimitExceeded
+        expr: rate(vsr_rate_limit_exceeded_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Rate limit frequently exceeded"
+          description: "Rate limit exceeded {{ $value }} times per second"
+
+      - alert: UnusualTrafficPattern
+        expr: rate(http_requests_total{job="vsr-api"}[5m]) > 2 * avg_over_time(rate(http_requests_total{job="vsr-api"}[5m])[1h:5m])
+        for: 10m
+        labels:
+          severity: warning
+          service: security
+        annotations:
+          summary: "Unusual traffic pattern detected"
+          description: "Request rate is {{ $value }} times higher than normal"

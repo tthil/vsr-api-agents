@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # API service
+  api:
+    image: ${REGISTRY_URL}/vsr-api:${TAG:-latest}
+    container_name: vsr-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=${MONGODB_URL}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - SPACES_ENDPOINT=${SPACES_ENDPOINT}
+      - SPACES_REGION=${SPACES_REGION}
+      - SPACES_KEY=${SPACES_KEY}
+      - SPACES_SECRET=${SPACES_SECRET}
+      - SPACES_BUCKET=${SPACES_BUCKET}
+      - API_KEYS=${API_KEYS}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # GPU worker service (dual-mode)
+  worker:
+    image: ${REGISTRY_URL}/vsr-worker:${TAG:-latest}
+    container_name: vsr-worker
+    restart: always
+    environment:
+      # Dual-mode configuration
+      - WORKER_MODE=gpu
+      - ENVIRONMENT=production
+      - MODEL_QUALITY=high
+      - PROCESSING_TIMEOUT=60
+      - MAX_VIDEO_DURATION=60
+      - MAX_RESOLUTION=1920,1080
+      - MEMORY_LIMIT_MB=8192
+      - MODEL_CACHE_DIR=/app/models
+      - MODEL_QUANTIZATION=false
+      - DEBUG=false
+      # Infrastructure
+      - MONGODB_URL=${MONGODB_URL}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - SPACES_ENDPOINT=${SPACES_ENDPOINT}
+      - SPACES_REGION=${SPACES_REGION}
+      - SPACES_KEY=${SPACES_KEY}
+      - SPACES_SECRET=${SPACES_SECRET}
+      - SPACES_BUCKET=${SPACES_BUCKET}
+      # GPU configuration
+      - GPU_DEVICE=0
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
